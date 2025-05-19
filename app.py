@@ -14,44 +14,17 @@ CONTENT_API_BASE = "https://content-api.sandbox.junction.dev"
 API_KEY = os.getenv("CONTENT_API_KEY", "jk_live_01j8r3grxbeve8ta0h1t5qbrvx")
 
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "127.0.0.1"),
-    "port": int(os.getenv("DB_PORT", 5432)),
-    "user": os.getenv("DB_USER", "postgres"),
-    "password": os.getenv("DB_PASS", "E9KuQZBD|3iZIU3XhQLbu<!ffs?S"),
-    "dbname": os.getenv("DB_NAME", "postgres"),
+    "host": os.getenv("DB_HOST"),
+    "port": int(os.getenv("DB_PORT")),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASS"),
+    "dbname": os.getenv("DB_NAME"),
 }
 
 POLL_INTERVAL = float(os.getenv("POLL_INTERVAL_SEC", 5))
 MAX_POLL_ATTEMPTS = int(os.getenv("MAX_POLL_ATTEMPTS", 12))
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
-
-
-def poll_for_offers(search_id):
-    """Poll the content API until offers are ready or we hit max attempts."""
-    url = f"{CONTENT_API_BASE}/flight-searches/{search_id}/offers"
-    headers = {
-        "x-api-key": API_KEY,
-        "Accept": "application/json",
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache",
-        "Expires": "0",
-    }
-    attempts = 0
-    while True:
-        attempts += 1
-        resp = requests.get(url, headers=headers)
-        if resp.status_code == 200:
-            text = resp.text.strip()
-            # sometimes empty / non-JSON
-            if text.startswith("{") and text.endswith("}"):
-                return resp.json()
-            return None
-        elif resp.status_code == 202 and attempts < MAX_POLL_ATTEMPTS:
-            time.sleep(POLL_INTERVAL)
-            continue
-        else:
-            resp.raise_for_status()
 
 
 def get_db_connection():
@@ -122,6 +95,33 @@ def flight_search():
     return jsonify(offers or {"items": []})
 
 
+def poll_for_offers(search_id):
+    """Poll the content API until offers are ready or we hit max attempts."""
+    url = f"{CONTENT_API_BASE}/flight-searches/{search_id}/offers"
+    headers = {
+        "x-api-key": API_KEY,
+        "Accept": "application/json",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+    attempts = 0
+    while True:
+        attempts += 1
+        resp = requests.get(url, headers=headers)
+        if resp.status_code == 200:
+            text = resp.text.strip()
+            # sometimes empty / non-JSON
+            if text.startswith("{") and text.endswith("}"):
+                return resp.json()
+            return None
+        elif resp.status_code == 202 and attempts < MAX_POLL_ATTEMPTS:
+            time.sleep(POLL_INTERVAL)
+            continue
+        else:
+            resp.raise_for_status()
+
+
 @app.route("/bookings", methods=["POST"])
 def create_booking():
     """
@@ -168,6 +168,5 @@ def db_data():
         return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
 
-# ── RUN ────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000, debug=True)
