@@ -151,15 +151,14 @@ def poll_for_offers(search_id):
 @app.route("/bookings", methods=["POST"])
 def create_booking():
     """
-    Expects booking payload exactly like your RN code builds:
-      {
-        "offerId": "...",
-        "passengers": [ { … }, … ]
-      }
+    Expects booking payload.
     """
     payload = request.get_json()
     if not payload:
+        app.logger.error("Create booking: Invalid JSON received.")
         abort(400, "Invalid JSON")
+
+    app.logger.info(f"Received booking payload: {payload}")
 
     url = f"{CONTENT_API_BASE}/bookings"
     headers = {
@@ -167,11 +166,46 @@ def create_booking():
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
+
+    app.logger.info(f"Proxying booking creation to URL: {url}")
     resp = requests.post(url, json=payload, headers=headers)
-    text = resp.text
+
+    # It's good to log the raw response text, especially for errors
+    response_text = resp.text
+    app.logger.info(
+        f"Booking creation response status: {resp.status_code}, Text: {response_text}"
+    )
+
     if not resp.ok:
-        abort(resp.status_code, f"Booking failed: {text}")
-    return jsonify(resp.json())
+        app.logger.error(f"Booking failed: {resp.status_code} - {response_text}")
+        # Return the actual error message from the Content API if possible
+        try:
+            error_json = resp.json()
+            abort(resp.status_code, description=error_json)
+        except ValueError:  # If response is not JSON
+            abort(
+                resp.status_code,
+                description=f"Booking creation failed: {response_text}",
+            )
+
+    try:
+        response_json = resp.json()
+        return jsonify(response_json)
+    except (
+        ValueError
+    ):  # If successful response is not JSON (should not happen for this API)
+        app.logger.error(
+            f"Booking successful but response was not JSON: {response_text}"
+        )
+        return (
+            jsonify(
+                {
+                    "message": "Booking successful, but response format was unexpected.",
+                    "raw_response": response_text,
+                }
+            ),
+            resp.status_code,
+        )
 
 
 @app.route("/db-data", methods=["GET"])
