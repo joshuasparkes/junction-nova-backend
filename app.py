@@ -74,30 +74,56 @@ def flight_search():
     if not body:
         abort(400, "Invalid JSON")
 
-    # Kick off the search
     create_url = f"{CONTENT_API_BASE}/flight-searches"
     headers = {
         "x-api-key": API_KEY,
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
+    app.logger.info(f"Requesting flight search creation with body: {body}")
     resp = requests.post(create_url, json=body, headers=headers)
+    app.logger.info(f"Flight search creation response status: {resp.status_code}")
     if not resp.ok:
+        app.logger.error(f"Search creation failed: {resp.text}")
         abort(resp.status_code, f"Search creation failed: {resp.text}")
 
     loc = resp.headers.get("Location", "")
-    match = loc.rsplit("/", 1)[-1] if "/" in loc else None
-    if not match:
-        abort(500, "No flight_search_id in Location header")
+    app.logger.info(f"Location header from flight search creation: {loc}")
 
-    # Poll for offers
+    match = None
+    if loc:
+        parts = loc.strip("/").split("/")
+        # Expecting .../flight-searches/{flight_search_id}/offers OR .../flight-searches/{flight_search_id}
+        if len(parts) >= 2 and parts[-1] == "offers" and parts[-3] == "flight-searches":
+            # Format: .../flight-searches/THE_ID/offers
+            potential_match = parts[-2]
+            if potential_match.startswith("flight_search_"):
+                match = potential_match
+        elif len(parts) >= 1 and parts[-2] == "flight-searches":
+            # Format: .../flight-searches/THE_ID
+            potential_match = parts[-1]
+            if potential_match.startswith("flight_search_"):
+                match = potential_match
+
+    app.logger.info(f"Extracted flight_search_id (match): {match}")
+    if not match:
+        app.logger.error(
+            f"Could not reliably extract flight_search_id from Location: {loc}. Extracted: {match}"
+        )
+        abort(
+            500,
+            f"Could not reliably extract flight_search_id from Location header. Received: {loc}",
+        )
+
     offers = poll_for_offers(match)
     return jsonify(offers or {"items": []})
 
 
 def poll_for_offers(search_id):
     """Poll the content API until offers are ready or we hit max attempts."""
+    app.logger.info(f"Polling for offers with search_id: {search_id}")
     url = f"{CONTENT_API_BASE}/flight-searches/{search_id}/offers"
+    app.logger.info(f"Polling URL: {url}")
     headers = {
         "x-api-key": API_KEY,
         "Accept": "application/json",

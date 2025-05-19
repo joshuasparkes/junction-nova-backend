@@ -10,8 +10,8 @@ disable=
     W0622,
     W0612,
     W0621,
-    
-
+    W0614,
+    W1203
 [MASTER]
 ignore=.venv,__pycache__  # Ignore these directories
 
