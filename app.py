@@ -11,7 +11,7 @@ load_dotenv()
 
 
 CONTENT_API_BASE = "https://content-api.sandbox.junction.dev"
-API_KEY = os.getenv("CONTENT_API_KEY", "jk_live_01j8r3grxbeve8ta0h1t5qbrvx")
+API_KEY = os.getenv("CONTENT_API_KEY")
 
 DB_CONFIG = {
     "host": os.getenv("DB_HOST"),
@@ -228,5 +228,276 @@ def db_data():
         return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
 
+def poll_for_train_offers(train_search_id):
+    """Poll the Content API for train offers until ready or max attempts."""
+    app.logger.info(f"Polling for train offers with train_search_id: {train_search_id}")
+    url = f"{CONTENT_API_BASE}/train-searches/{train_search_id}/offers"
+    app.logger.info(f"Train offers polling URL: {url}")
+    headers = {
+        "x-api-key": API_KEY,
+        "Accept": "application/json",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+    attempts = 0
+    while True:
+        attempts += 1
+        app.logger.info(f"Train offers polling attempt {attempts}/{MAX_POLL_ATTEMPTS}")
+        resp = requests.get(url, headers=headers)
+        if resp.status_code == 200:
+            text = resp.text.strip()
+            if text.startswith("{") and text.endswith("}"):
+                app.logger.info("Train offers received (200 OK).")
+                return resp.json()
+            app.logger.info(
+                "Train offers received (200 OK) but response was empty/non-JSON."
+            )
+            return None  # Or an empty structure like {"items": []}
+        elif resp.status_code == 202 and attempts < MAX_POLL_ATTEMPTS:
+            app.logger.info(
+                f"Train offers not ready yet (202 Accepted). Waiting {POLL_INTERVAL}s."
+            )
+            time.sleep(POLL_INTERVAL)
+            continue
+        else:
+            app.logger.error(
+                f"Failed to get train offers. Status: {resp.status_code}, Text: {resp.text}"
+            )
+            resp.raise_for_status()  # Will raise an HTTPError
+
+
+@app.route("/train-station-suggestions", methods=["GET"])
+def train_station_suggestions():
+    query = request.args.get("name", "").strip()
+    if len(query) < 3:  # Or whatever minimum length makes sense
+        return jsonify({"items": []})
+
+    url = f"{CONTENT_API_BASE}/places?filter[name][like]={query}&filter[type][eq]=railway-station&page[limit]=5"
+    headers = {
+        "x-api-key": API_KEY,
+        "Accept": "application/json",
+    }
+    app.logger.info(f"Fetching train station suggestions for '{query}' from URL: {url}")
+    try:
+        resp = requests.get(url, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+        return jsonify({"items": data.get("items", [])})
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"Error fetching train station suggestions: {e}")
+        return jsonify({"items": [], "error": str(e)}), 500
+
+
+@app.route("/train-search", methods=["POST"])
+def train_search():
+    body = request.get_json()
+    if not body:
+        app.logger.error("Train search: Invalid JSON received.")
+        abort(400, "Invalid JSON")
+
+    create_url = f"{CONTENT_API_BASE}/train-searches"
+    headers = {
+        "x-api-key": API_KEY,
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    app.logger.info(
+        f"Requesting train search creation with body: {body} to URL: {create_url}"
+    )
+
+    try:
+        resp = requests.post(create_url, json=body, headers=headers)
+        app.logger.info(
+            f"Train search creation response status: {resp.status_code}, Text: {resp.text[:200]}"
+        )  # Log snippet of text
+        resp.raise_for_status()  # Check for HTTP errors for search creation
+
+        loc = resp.headers.get("Location", "")
+        app.logger.info(f"Location header from train search creation: {loc}")
+
+        train_search_id = None
+        if loc:
+            parts = loc.strip("/").split("/")
+            # Expecting .../train-searches/{train_search_id}/offers (new) OR .../train-searches/{train_search_id} (old)
+            if (
+                len(parts) >= 2
+                and parts[-1] == "offers"
+                and parts[-3] == "train-searches"
+            ):
+                potential_match = parts[-2]
+                if potential_match.startswith("train_search_"):
+                    train_search_id = potential_match
+            elif len(parts) >= 1 and parts[-2] == "train-searches":
+                potential_match = parts[-1]
+                if potential_match.startswith("train_search_"):
+                    train_search_id = potential_match
+
+        app.logger.info(f"Extracted train_search_id: {train_search_id}")
+        if not train_search_id:
+            app.logger.error(
+                f"Could not reliably extract train_search_id from Location: {loc}"
+            )
+            abort(
+                500,
+                f"Could not reliably extract train_search_id from Location header. Received: {loc}",
+            )
+
+        offers = poll_for_train_offers(train_search_id)
+        return jsonify(offers or {"items": []})
+
+    except requests.exceptions.HTTPError as e:
+        # Log the error and response if available
+        error_message = f"Train search Content API error: {e}"
+        if e.response is not None:
+            error_message += f" - Response: {e.response.text}"
+            try:
+                # Try to return JSON error from upstream if possible
+                return jsonify(e.response.json()), e.response.status_code
+            except ValueError:
+                # Fallback if error response is not JSON
+                return (
+                    jsonify(
+                        {"error": "Upstream API error", "details": e.response.text}
+                    ),
+                    e.response.status_code,
+                )
+        app.logger.error(error_message)
+        abort(500, description=error_message)  # Fallback generic error
+    except Exception as e:
+        app.logger.error(f"Unexpected error in /train-search: {str(e)}")
+        abort(500, str(e))
+
+
+@app.route("/bookings/<path:booking_id>/request-cancellation", methods=["POST"])
+def request_booking_cancellation(booking_id):
+    payload = request.get_json()
+    if not payload:
+        app.logger.error(
+            f"Request cancellation for booking {booking_id}: Invalid JSON."
+        )
+        abort(400, "Invalid JSON")
+
+    url = f"{CONTENT_API_BASE}/bookings/{booking_id}/request-cancellation"
+    headers = {
+        "x-api-key": API_KEY,
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    app.logger.info(
+        f"Proxying booking cancellation request to URL: {url} for booking ID: {booking_id}"
+    )
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers)
+        response_text = resp.text
+        app.logger.debug(
+            f"Booking cancellation request response status: {resp.status_code}, Text: {response_text[:200]}"
+        )
+        if not resp.ok:
+            app.logger.error(
+                f"Booking cancellation request failed for {booking_id}: {resp.status_code} - {response_text}"
+            )
+            try:
+                return jsonify(resp.json()), resp.status_code
+            except ValueError:
+                return (
+                    jsonify(
+                        {
+                            "error": "Cancellation request failed",
+                            "details": response_text,
+                        }
+                    ),
+                    resp.status_code,
+                )
+        return jsonify(resp.json()), resp.status_code
+    except requests.exceptions.RequestException as e:
+        app.logger.error(
+            f"Network error during booking cancellation for {booking_id}: {e}"
+        )
+        return (
+            jsonify(
+                {
+                    "error": "Network error during cancellation request",
+                    "details": str(e),
+                }
+            ),
+            503,
+        )
+    except Exception as e:
+        app.logger.error(
+            f"Unexpected error during booking cancellation for {booking_id}: {e}"
+        )
+        return (
+            jsonify({"error": "An unexpected error occurred", "details": str(e)}),
+            500,
+        )
+
+
+@app.route("/bookings/<path:booking_id>/confirm-cancellation", methods=["POST"])
+def confirm_booking_cancellation(booking_id):
+    payload = request.get_json()
+    if not payload:
+        app.logger.error(
+            f"Confirm cancellation for booking {booking_id}: Invalid JSON."
+        )
+        abort(400, "Invalid JSON")
+
+    url = f"{CONTENT_API_BASE}/bookings/{booking_id}/confirm-cancellation"
+    headers = {
+        "x-api-key": API_KEY,
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    app.logger.info(
+        f"Proxying booking confirm cancellation to URL: {url} for booking ID: {booking_id}"
+    )
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers)
+        response_text = resp.text
+        app.logger.debug(
+            f"Booking confirm cancellation response status: {resp.status_code}, Text: {response_text[:200]}"
+        )
+        if not resp.ok:
+            app.logger.error(
+                f"Booking confirm cancellation failed for {booking_id}: {resp.status_code} - {response_text}"
+            )
+            try:
+                return jsonify(resp.json()), resp.status_code
+            except ValueError:
+                return (
+                    jsonify(
+                        {
+                            "error": "Confirm cancellation failed",
+                            "details": response_text,
+                        }
+                    ),
+                    resp.status_code,
+                )
+        return jsonify(resp.json()), resp.status_code
+    except requests.exceptions.RequestException as e:
+        app.logger.error(
+            f"Network error during confirm booking cancellation for {booking_id}: {e}"
+        )
+        return (
+            jsonify(
+                {
+                    "error": "Network error during confirm cancellation",
+                    "details": str(e),
+                }
+            ),
+            503,
+        )
+    except Exception as e:
+        app.logger.error(
+            f"Unexpected error during confirm booking cancellation for {booking_id}: {e}"
+        )
+        return (
+            jsonify({"error": "An unexpected error occurred", "details": str(e)}),
+            500,
+        )
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=3000, debug=True)
+    app.run(host="0.0.0.0", port=4000, debug=True)

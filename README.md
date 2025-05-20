@@ -25,7 +25,7 @@ ssh -i ~/.ssh/id_ed25519 \
 
 ```
 ## Terminal C: Run backend locally
-flask run --host=0.0.0.0 --port=3000
+flask run --host=0.0.0.0 --port=4000
 
 #### What this does:
 Step A forwards your local port 2222 to the internal host’s SSH on 172.31.67.208.
