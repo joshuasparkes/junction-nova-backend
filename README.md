@@ -19,9 +19,11 @@ ssh -N -L 2222:172.31.67.208:22 joshua@35.177.249.54
 
 ## Terminal B: localhost:5432 → remote Postgres via the jump host
 
-ssh -i ~/.ssh/id_ed25519 \
- -N -L 5432:content-api-postgres.c14a0gc6ym4o.eu-west-2.rds.amazonaws.com:5432 \
- joshua@localhost -p 2222
+ssh -i ~/.ssh/id_rsa \
+    -o IdentitiesOnly=yes \
+    -N \
+    -L 5432:content-api-postgres.c14a0gc6ym4o.eu-west-2.rds.amazonaws.com:5432 \
+    joshua@localhost -p 2222
 
 ```
 ## Terminal C: Run backend locally

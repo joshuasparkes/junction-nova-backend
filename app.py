@@ -369,16 +369,15 @@ def train_search():
         abort(500, str(e))
 
 
-@app.route("/bookings/<path:booking_id>/request-cancellation", methods=["POST"])
-def request_booking_cancellation(booking_id):
+@app.route("/cancellations/request", methods=["POST"])
+def request_cancellation():
     payload = request.get_json()
-    if not payload:
-        app.logger.error(
-            f"Request cancellation for booking {booking_id}: Invalid JSON."
-        )
-        abort(400, "Invalid JSON")
+    if not payload or "bookingId" not in payload:
+        app.logger.error("Request cancellation: Invalid JSON or missing bookingId.")
+        abort(400, "Invalid JSON or missing bookingId")
 
-    url = f"{CONTENT_API_BASE}/bookings/{booking_id}/request-cancellation"
+    booking_id = payload["bookingId"]
+    url = f"{CONTENT_API_BASE}/cancellations/request"
     headers = {
         "x-api-key": API_KEY,
         "Accept": "application/json",
