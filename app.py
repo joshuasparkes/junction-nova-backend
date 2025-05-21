@@ -384,11 +384,18 @@ def request_cancellation():
         "Content-Type": "application/json",
     }
     app.logger.info(
-        f"Proxying booking cancellation request to URL: {url} for booking ID: {booking_id}"
+        f"Proxying booking cancellation request. Target URL: {url}, Booking ID in payload: {payload.get('bookingId')}"
     )
 
     try:
-        resp = requests.post(url, json=payload, headers=headers)
+        app.logger.info(
+            f"Attempting to POST to Content API for booking {booking_id} at {url}"
+        )
+        resp = requests.post(url, json=payload, headers=headers, timeout=15)
+        app.logger.info(
+            f"Content API POST call completed for booking {booking_id}. Status: {resp.status_code if resp else 'No response object'}"
+        )
+
         response_text = resp.text
         app.logger.debug(
             f"Booking cancellation request response status: {resp.status_code}, Text: {response_text[:200]}"
@@ -410,9 +417,22 @@ def request_cancellation():
                     resp.status_code,
                 )
         return jsonify(resp.json()), resp.status_code
+    except requests.exceptions.Timeout:
+        app.logger.error(
+            f"Content API call timed out for booking {booking_id} at {url}"
+        )
+        return (
+            jsonify(
+                {
+                    "error": "Cancellation request timed out",
+                    "details": f"Timeout after 15 seconds for {url}",
+                }
+            ),
+            504,
+        )
     except requests.exceptions.RequestException as e:
         app.logger.error(
-            f"Network error during booking cancellation for {booking_id}: {e}"
+            f"Network error during booking cancellation for {booking_id} to {url}: {e}"
         )
         return (
             jsonify(
@@ -425,7 +445,7 @@ def request_cancellation():
         )
     except Exception as e:
         app.logger.error(
-            f"Unexpected error during booking cancellation for {booking_id}: {e}"
+            f"Unexpected error during booking cancellation for {booking_id} to {url}: {e}"
         )
         return (
             jsonify({"error": "An unexpected error occurred", "details": str(e)}),
