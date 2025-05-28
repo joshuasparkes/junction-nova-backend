@@ -6,6 +6,7 @@ from psycopg2.extras import RealDictCursor
 from flask import Flask, request, jsonify, abort
 from flask_cors import CORS
 from dotenv import load_dotenv
+from kiwi_client import resolve_location, search_multimodal
 
 load_dotenv()
 
@@ -516,6 +517,124 @@ def confirm_booking_cancellation(booking_id):
             jsonify({"error": "An unexpected error occurred", "details": str(e)}),
             500,
         )
+
+
+@app.route("/multimodal-search", methods=["POST"])
+def multimodal_search():
+    body = request.get_json()
+    if not body:
+        app.logger.error("Multimodal search: Invalid JSON received.")
+        abort(400, "Invalid JSON")
+
+    app.logger.info(f"Multimodal search request with body: {body}")
+
+    try:
+        origin = body.get("origin")
+        destination = body.get("destination")
+        date_from = body.get("date_from")
+        date_to = body.get("date_to", date_from)
+        adults = body.get("adults", 1)
+
+        if not all([origin, destination, date_from]):
+            app.logger.error("Multimodal search: Missing required parameters.")
+            abort(400, "Missing required parameters: origin, destination, date_from")
+
+        def is_airport_code(code):
+            """Check if the code looks like an airport code (3 uppercase letters)"""
+            return len(code) == 3 and code.isupper() and code.isalpha()
+
+        # Use codes directly if they look like airport codes, otherwise resolve
+        if is_airport_code(origin):
+            origin_code = origin
+            app.logger.info(f"Using origin '{origin}' as airport code directly")
+        else:
+            try:
+                origin_locations = resolve_location(origin)
+                if not origin_locations:
+                    app.logger.error(f"No locations found for origin: {origin}")
+                    abort(404, f"No locations found for origin: {origin}")
+                origin_code = origin_locations[0]["code"]
+                app.logger.info(f"Resolved origin '{origin}' to code '{origin_code}'")
+            except Exception as e:
+                app.logger.error(f"Error resolving origin location: {str(e)}")
+                abort(500, f"Error resolving origin location: {str(e)}")
+
+        if is_airport_code(destination):
+            dest_code = destination
+            app.logger.info(
+                f"Using destination '{destination}' as airport code directly"
+            )
+        else:
+            try:
+                destination_locations = resolve_location(destination)
+                if not destination_locations:
+                    app.logger.error(
+                        f"No locations found for destination: {destination}"
+                    )
+                    abort(404, f"No locations found for destination: {destination}")
+                dest_code = destination_locations[0]["code"]
+                app.logger.info(
+                    f"Resolved destination '{destination}' to code '{dest_code}'"
+                )
+            except Exception as e:
+                app.logger.error(f"Error resolving destination location: {str(e)}")
+                abort(500, f"Error resolving destination location: {str(e)}")
+
+        # Perform multimodal search
+        try:
+            results = search_multimodal(
+                origin_code, dest_code, date_from, date_to, adults=adults
+            )
+
+            # Debug: Log the first result to see its structure
+            if results:
+                app.logger.info(f"Sample result structure: {results[0]}")
+            else:
+                app.logger.info("No results returned from search")
+
+            # Transform results to normalized format
+            itineraries = []
+            for r in results:
+                try:
+                    itinerary = {
+                        "price": r.get("price"),
+                        "currency": r.get("conversion", {}).get("EUR")
+                        or "EUR",  # Handle missing currency
+                        "duration_total": r.get("duration", {}).get("total"),
+                        "segments": [],
+                        "booking_token": r.get("booking_token"),
+                    }
+
+                    # Process route segments
+                    for seg in r.get("route", []):
+                        segment = {
+                            "mode": seg.get("vehicle_type", "aircraft"),
+                            "from": seg.get("cityFrom"),
+                            "to": seg.get("cityTo"),
+                            "depart_utc": seg.get("dTimeUTC"),
+                            "arrive_utc": seg.get("aTimeUTC"),
+                            "carrier": seg.get("airline")
+                            or seg.get("operating_carrier"),
+                        }
+                        itinerary["segments"].append(segment)
+
+                    itineraries.append(itinerary)
+                except Exception as e:
+                    app.logger.warning(
+                        f"Error processing itinerary: {e}, skipping this result"
+                    )
+                    continue
+
+            app.logger.info(f"Multimodal search found {len(itineraries)} itineraries")
+            return jsonify({"itineraries": itineraries})
+
+        except Exception as e:
+            app.logger.error(f"Error performing multimodal search: {str(e)}")
+            abort(500, f"Error performing multimodal search: {str(e)}")
+
+    except Exception as e:
+        app.logger.error(f"Unexpected error in multimodal search: {str(e)}")
+        abort(500, f"Unexpected error: {str(e)}")
 
 
 if __name__ == "__main__":
