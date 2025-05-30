@@ -598,11 +598,20 @@ def multimodal_search():
                 try:
                     itinerary = {
                         "price": r.get("price"),
-                        "currency": r.get("conversion", {}).get("EUR")
-                        or "EUR",  # Handle missing currency
-                        "duration_total": r.get("duration", {}).get("total"),
+                        "currency": "GBP",
+                        "duration_total": r.get("duration", {}).get("total", 0),
                         "segments": [],
                         "booking_token": r.get("booking_token"),
+                        "virtual_interlining": r.get("virtual_interlining", False),
+                        "countryFrom": r.get("countryFrom"),
+                        "countryTo": r.get("countryTo"),
+                        "airlines": r.get("airlines", []),
+                        "flyFrom": r.get("flyFrom"),
+                        "flyTo": r.get("flyTo"),
+                        "cityFrom": r.get("cityFrom"),
+                        "cityTo": r.get("cityTo"),
+                        "cityCodeFrom": r.get("cityCodeFrom"),
+                        "cityCodeTo": r.get("cityCodeTo"),
                     }
 
                     # Process route segments
@@ -611,10 +620,23 @@ def multimodal_search():
                             "mode": seg.get("vehicle_type", "aircraft"),
                             "from": seg.get("cityFrom"),
                             "to": seg.get("cityTo"),
-                            "depart_utc": seg.get("dTimeUTC"),
-                            "arrive_utc": seg.get("aTimeUTC"),
+                            "depart_utc": seg.get("utc_departure"),
+                            "arrive_utc": seg.get("utc_arrival"),
+                            "local_departure": seg.get("local_departure"),
+                            "local_arrival": seg.get("local_arrival"),
                             "carrier": seg.get("airline")
                             or seg.get("operating_carrier"),
+                            "flight_no": seg.get("flight_no"),
+                            "operating_flight_no": seg.get("operating_flight_no"),
+                            "airline": seg.get("airline"),
+                            "operating_carrier": seg.get("operating_carrier"),
+                            "vehicle_type": seg.get("vehicle_type"),
+                            "flyFrom": seg.get("flyFrom"),
+                            "flyTo": seg.get("flyTo"),
+                            "cityFrom": seg.get("cityFrom"),
+                            "cityTo": seg.get("cityTo"),
+                            "cityCodeFrom": seg.get("cityCodeFrom"),
+                            "cityCodeTo": seg.get("cityCodeTo"),
                         }
                         itinerary["segments"].append(segment)
 
